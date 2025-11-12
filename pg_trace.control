@@ -1,7 +1,0 @@
-# pg_trace extension
-comment = 'Oracle 10046-style session tracing for PostgreSQL'
-default_version = '1.0'
-module_pathname = '$libdir/pg_trace'
-relocatable = true
-requires = ''
-

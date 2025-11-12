@@ -1,8 +1,0 @@
-# pg_trace_enhanced extension control file
-comment = 'Oracle 10046-style tracing with OS-level statistics (no root required!)'
-default_version = '1.0'
-module_pathname = '$libdir/pg_trace_enhanced'
-relocatable = true
-requires = ''
-superuser = false
-

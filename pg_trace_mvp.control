@@ -1,9 +1,0 @@
-# pg_trace_mvp extension control file
-comment = 'Oracle 10046-style session tracing for PostgreSQL (MVP)'
-default_version = '1.0'
-module_pathname = '$libdir/pg_trace_mvp'
-relocatable = true
-requires = ''
-superuser = false
-
-
