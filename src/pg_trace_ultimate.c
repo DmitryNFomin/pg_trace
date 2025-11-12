@@ -66,16 +66,14 @@ static TimestampTz session_start_time;
 /*---- Block I/O tracking ----*/
 typedef struct BlockIoStat
 {
-    RelFileNode rnode;
+    Oid spcNode;            /* Tablespace OID */
+    Oid dbNode;             /* Database OID */
+    Oid relNode;            /* Relation OID */
     ForkNumber forknum;
     BlockNumber blocknum;
-    char *relname;
-    char *filepath;
-    TimestampTz timestamp;
-    double io_time_us;
+    char relname[64];       /* Relation name */
+    double io_time_us;      /* Time for this block's I/O */
     bool was_hit;           /* Buffer hit (no syscall) */
-    bool from_os_cache;     /* Fast syscall (< threshold) */
-    bool from_disk;         /* Slow syscall (> threshold) */
 } BlockIoStat;
 
 /*---- Query execution context ----*/
@@ -124,8 +122,7 @@ static void trace_printf(const char *fmt, ...) pg_attribute_printf(1, 2);
 static void track_block_io_during_execution(void);
 static void write_block_io_summary(void);
 static void write_plan_tree(PlanState *planstate, int level);
-static char *get_relation_name(RelFileNode *rnode);
-static void capture_buffer_io_stats(void);
+static const char *fork_names[] = {"main", "fsm", "vm", "init"};
 
 /* Hook implementations */
 static PlannedStmt *trace_planner(Query *parse, const char *query_string,
@@ -232,17 +229,19 @@ get_relation_name(RelFileNode *rnode)
 }
 
 /*
- * Capture buffer I/O statistics by examining buffer usage deltas
+ * Capture blocks from buffer descriptors with relation names
  */
 static void
 capture_buffer_io_stats(void)
 {
+    int i;
+    BufferDesc *bufHdr;
+    uint32 buf_state;
     BufferUsage current_bufusage;
     instr_time current_io_time;
     long new_reads;
-    long new_hits;
-    instr_time io_delta;
-    double io_time_us;
+    double io_time_us = 0;
+    double avg_time_per_block;
     
     if (!track_io_timing)
         return;
@@ -253,49 +252,69 @@ capture_buffer_io_stats(void)
     /* Check if any new I/O happened */
     new_reads = current_bufusage.shared_blks_read - 
                 buffer_tracker.last_bufusage.shared_blks_read;
-    new_hits = current_bufusage.shared_blks_hit - 
-               buffer_tracker.last_bufusage.shared_blks_hit;
     
-    if (new_reads > 0 || new_hits > 0)
+    if (new_reads > 0)
     {
-        /* Calculate I/O time delta */
-        io_delta = current_io_time;
+        instr_time io_delta = current_io_time;
         INSTR_TIME_SUBTRACT(io_delta, buffer_tracker.last_io_time);
         io_time_us = INSTR_TIME_GET_MICROSEC(io_delta);
+        avg_time_per_block = io_time_us / new_reads;
         
-        /* Create block I/O stat entry */
-        BlockIoStat *stat = palloc0(sizeof(BlockIoStat));
-        stat->timestamp = GetCurrentTimestamp();
+        current_query_context->disk_reads += new_reads;
+        current_query_context->total_disk_time_us += io_time_us;
+    }
+    
+    /* Update hits */
+    current_query_context->pg_cache_hits += current_bufusage.shared_blks_hit - 
+                                            buffer_tracker.last_bufusage.shared_blks_hit;
+    
+    /* Scan buffer descriptors to capture which specific blocks were accessed */
+    for (i = 0; i < NBuffers && i < 10000; i++)  /* Limit scan */
+    {
+        bufHdr = GetBufferDescriptor(i);
+        buf_state = LockBufHdr(bufHdr);
         
-        if (new_hits > 0)
+        /* Check if this buffer is valid, tagged, and was recently used */
+        if ((buf_state & BM_VALID) && (buf_state & BM_TAG_VALID) &&
+            bufHdr->tag.rnode.dbNode == MyDatabaseId)
         {
-            /* Buffer cache hit - no I/O */
-            stat->was_hit = true;
-            stat->io_time_us = 0;
-            current_query_context->pg_cache_hits += new_hits;
-        }
-        else if (new_reads > 0)
-        {
-            /* Buffer miss - I/O occurred */
-            stat->was_hit = false;
-            stat->io_time_us = io_time_us / new_reads;  /* Average per block */
+            BlockIoStat *stat = palloc0(sizeof(BlockIoStat));
             
-            /* Classify based on timing */
-            if (stat->io_time_us < os_cache_threshold_us)
+            stat->spcNode = bufHdr->tag.rnode.spcNode;
+            stat->dbNode = bufHdr->tag.rnode.dbNode;
+            stat->relNode = bufHdr->tag.rnode.relNode;
+            stat->forknum = bufHdr->tag.forkNum;
+            stat->blocknum = bufHdr->tag.blockNum;
+            
+            /* Get relation name */
             {
-                stat->from_os_cache = true;
-                current_query_context->os_cache_hits += new_reads;
-                current_query_context->total_os_cache_time_us += io_time_us;
+                char *relname = get_rel_name(stat->relNode);
+            if (relname)
+            {
+                strncpy(stat->relname, relname, sizeof(stat->relname) - 1);
+                pfree(relname);
             }
             else
             {
-                stat->from_disk = true;
-                current_query_context->disk_reads += new_reads;
-                current_query_context->total_disk_time_us += io_time_us;
+                snprintf(stat->relname, sizeof(stat->relname), "rel_%u", stat->relNode);
+            }
+            }
+            
+            /* Estimate timing for this block */
+            stat->was_hit = (BUF_STATE_GET_REFCOUNT(buf_state) > 1);
+            stat->io_time_us = stat->was_hit ? 0 : avg_time_per_block;
+            
+            current_query_context->block_ios = lappend(current_query_context->block_ios, stat);
+            
+            /* Limit collection to 500 blocks */
+            if (list_length(current_query_context->block_ios) >= 500)
+            {
+                UnlockBufHdr(bufHdr, buf_state);
+                break;
             }
         }
         
-        current_query_context->block_ios = lappend(current_query_context->block_ios, stat);
+        UnlockBufHdr(bufHdr, buf_state);
     }
     
     /* Update tracker */
@@ -329,81 +348,80 @@ write_block_io_summary(void)
         return;
     
     trace_printf("---------------------------------------------------------------------\n");
-    trace_printf("BLOCK I/O ANALYSIS (track_io_timing=%s):\n",
-                 track_io_timing ? "on" : "off");
+    trace_printf("WAIT EVENTS (Oracle 10046-style):\n");
+    trace_printf("---------------------------------------------------------------------\n");
     
-    if (!track_io_timing)
+    /* Print per-block wait events */
+    if (current_query_context->block_ios != NIL)
     {
-        trace_printf("  WARNING: track_io_timing is OFF - no timing data available!\n");
-        trace_printf("  Enable with: SET track_io_timing = on;\n");
-        return;
-    }
-    
-    trace_printf("\n");
-    trace_printf("Three-Tier Cache Analysis:\n");
-    trace_printf("\n");
-    
-    /* Tier 1: PostgreSQL shared buffers */
-    trace_printf("  Tier 1 - PostgreSQL Shared Buffers:\n");
-    trace_printf("    Hits: %ld blocks (%.1f%%) - NO syscall, instant access\n",
-                 current_query_context->pg_cache_hits,
-                 (double)current_query_context->pg_cache_hits / total_blocks * 100);
-    
-    /* Tier 2: OS page cache */
-    if (current_query_context->os_cache_hits > 0)
-    {
-        double avg_os_cache_us = current_query_context->total_os_cache_time_us / 
-                                 current_query_context->os_cache_hits;
+        ListCell *lc;
+        BlockIoStat *stat;
+        int block_num;
         
-        trace_printf("\n");
-        trace_printf("  Tier 2 - OS Page Cache:\n");
-        trace_printf("    Hits: %ld blocks (%.1f%%) - syscall but NO disk I/O\n",
-                     current_query_context->os_cache_hits,
-                     (double)current_query_context->os_cache_hits / total_blocks * 100);
-        trace_printf("    Avg latency: %.1f us (< %d us threshold)\n",
-                     avg_os_cache_us, os_cache_threshold_us);
-        trace_printf("    Total time: %.2f ms\n",
-                     current_query_context->total_os_cache_time_us / 1000.0);
+        block_num = 0;
+        
+        foreach(lc, current_query_context->block_ios)
+        {
+            stat = (BlockIoStat *) lfirst(lc);
+            
+            if (!stat->was_hit && stat->io_time_us > 0)
+            {
+                /* Print Oracle-style WAIT event */
+                trace_printf("WAIT #%lld: nam='db file sequential read' ela=%.0f file#=%u/%u/%u block=%u obj#=%u\n",
+                             (long long) current_query_context->cursor_id,
+                             stat->io_time_us,
+                             stat->spcNode,
+                             stat->dbNode,
+                             stat->relNode,
+                             stat->blocknum,
+                             stat->relNode);
+                trace_printf("  table='%s' fork=%s\n",
+                             stat->relname,
+                             (stat->forknum < 4) ? fork_names[stat->forknum] : "unknown");
+                
+                block_num++;
+                if (block_num >= 100)
+                {
+                    trace_printf("  ... (showing first 100 I/O blocks only, total: %d)\n",
+                                 list_length(current_query_context->block_ios));
+                    break;
+                }
+            }
+        }
+        
+        if (block_num == 0)
+            trace_printf("  (no physical I/O - all blocks from cache)\n");
     }
     
-    /* Tier 3: Physical disk */
+    trace_printf("\n");
+    trace_printf("---------------------------------------------------------------------\n");
+    trace_printf("BLOCK I/O SUMMARY:\n");
+    trace_printf("---------------------------------------------------------------------\n");
+    trace_printf("Total blocks accessed: %ld\n", total_blocks);
+    trace_printf("  Buffer hits (cr): %ld blocks - no I/O\n",
+                 current_query_context->pg_cache_hits);
+    trace_printf("  Physical reads (pr): %ld blocks\n",
+                 current_query_context->disk_reads);
+    
     if (current_query_context->disk_reads > 0)
     {
-        double avg_disk_us = current_query_context->total_disk_time_us / 
-                            current_query_context->disk_reads;
-        
-        trace_printf("\n");
-        trace_printf("  Tier 3 - Physical Disk:\n");
-        trace_printf("    Reads: %ld blocks (%.1f%%) - ACTUAL physical I/O\n",
-                     current_query_context->disk_reads,
-                     (double)current_query_context->disk_reads / total_blocks * 100);
-        trace_printf("    Avg latency: %.1f us (> %d us threshold)\n",
-                     avg_disk_us, os_cache_threshold_us);
-        trace_printf("    Total time: %.2f ms ← THIS IS THE BOTTLENECK!\n",
+        double avg_time = current_query_context->total_disk_time_us / current_query_context->disk_reads;
+        trace_printf("  Average I/O time: %.1f microseconds/block\n", avg_time);
+        trace_printf("  Total I/O time: %.2f ms\n",
                      current_query_context->total_disk_time_us / 1000.0);
     }
     
-    trace_printf("\n");
-    trace_printf("SUMMARY:\n");
-    trace_printf("  Total blocks accessed: %ld\n", total_blocks);
-    trace_printf("  No I/O (PG cache): %ld (%.1f%%)\n",
-                 current_query_context->pg_cache_hits,
-                 (double)current_query_context->pg_cache_hits / total_blocks * 100);
-    trace_printf("  Fast I/O (OS cache): %ld (%.1f%%)\n",
-                 current_query_context->os_cache_hits,
-                 (double)current_query_context->os_cache_hits / total_blocks * 100);
-    trace_printf("  Slow I/O (disk): %ld (%.1f%%) ← Performance issue if high\n",
-                 current_query_context->disk_reads,
-                 (double)current_query_context->disk_reads / total_blocks * 100);
-    
     /* Verify against /proc if available */
-    ProcStats os_end;
-    if (proc_read_all_stats(MyProcPid, &os_end))
     {
-        ProcIoStats io_diff;
-        proc_io_stats_diff(&current_query_context->os_stats_start.io, &os_end.io, &io_diff);
+        ProcStats os_end;
         
-        long actual_disk_blocks = io_diff.read_bytes / BLCKSZ;
+        if (proc_read_all_stats(MyProcPid, &os_end))
+        {
+            ProcIoStats io_diff;
+            long actual_disk_blocks;
+            
+            proc_io_stats_diff(&current_query_context->os_stats_start.io, &os_end.io, &io_diff);
+            actual_disk_blocks = io_diff.read_bytes / BLCKSZ;
         
         trace_printf("\n");
         trace_printf("Verification from /proc/[pid]/io:\n");
@@ -414,6 +432,7 @@ write_block_io_summary(void)
             trace_printf("  ✓ Matches our disk read count!\n");
         else if (actual_disk_blocks < current_query_context->disk_reads)
             trace_printf("  Note: Some 'disk' reads may have been from OS cache\n");
+        }
     }
 }
 
