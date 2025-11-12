@@ -1,0 +1,48 @@
+# Makefile for pg_trace MVP
+
+MODULE_big = pg_trace_mvp
+OBJS = src/pg_trace_mvp.o
+
+EXTENSION = pg_trace_mvp
+DATA = sql/pg_trace_mvp--1.0.sql
+
+# PostgreSQL configuration
+PG_CONFIG ?= pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+include $(PGXS)
+
+# Additional build targets
+.PHONY: install-ebpf check-ebpf
+
+check-ebpf:
+	@echo "Checking eBPF requirements..."
+	@which python3 > /dev/null || (echo "Error: python3 not found" && exit 1)
+	@python3 -c "import bcc" 2>/dev/null || (echo "Warning: BCC not installed. Install with: pip3 install bcc" && exit 1)
+	@echo "eBPF requirements OK"
+
+install-ebpf:
+	$(MKDIR_P) '$(DESTDIR)/usr/local/bin'
+	$(INSTALL_SCRIPT) ebpf/pg_trace_waits.py '$(DESTDIR)/usr/local/bin/'
+	$(INSTALL_SCRIPT) ebpf/pg_trace_orchestrate.py '$(DESTDIR)/usr/local/bin/'
+	chmod +x '$(DESTDIR)/usr/local/bin/pg_trace_waits.py'
+	chmod +x '$(DESTDIR)/usr/local/bin/pg_trace_orchestrate.py'
+
+help:
+	@echo "pg_trace MVP - Oracle 10046-style tracing for PostgreSQL"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make          - Build extension"
+	@echo "  make install  - Install extension to PostgreSQL"
+	@echo "  make install-ebpf - Install eBPF scripts"
+	@echo "  make check-ebpf   - Check eBPF requirements"
+	@echo ""
+	@echo "Usage:"
+	@echo "  1. Add to postgresql.conf: shared_preload_libraries = 'pg_trace_mvp'"
+	@echo "  2. Restart PostgreSQL"
+	@echo "  3. CREATE EXTENSION pg_trace_mvp;"
+	@echo "  4. SELECT pg_trace_start_trace();"
+	@echo "  5. In another terminal: sudo python3 pg_trace_waits.py -p <pid>"
+	@echo "  6. Run queries"
+	@echo "  7. SELECT pg_trace_stop_trace();"
+
+

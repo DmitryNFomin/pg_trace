@@ -1,0 +1,55 @@
+# PostgreSQL extension build artifacts
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+
+# Build directories
+build/
+dist/
+*.egg-info/
+
+# PostgreSQL extension control files (keep these, they're source)
+# But ignore any generated ones
+*.control.bak
+
+# Trace output files
+*.trc
+/tmp/pg_trace/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Python cache (for eBPF scripts)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Test files
+test_*.sql
+*.test
+
+# Documentation build
+docs/_build/
+site/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+

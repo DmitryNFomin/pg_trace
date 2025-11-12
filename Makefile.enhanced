@@ -1,0 +1,49 @@
+# Makefile for pg_trace Enhanced (with /proc stats)
+
+MODULE_big = pg_trace_enhanced
+OBJS = src/pg_trace_enhanced.o src/pg_trace_procfs.o
+
+EXTENSION = pg_trace_enhanced
+DATA = sql/pg_trace_enhanced--1.0.sql
+
+# PostgreSQL configuration
+PG_CONFIG ?= pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+include $(PGXS)
+
+# Additional include paths
+PG_CPPFLAGS += -I$(srcdir)/src
+
+help:
+	@echo "pg_trace Enhanced - Oracle 10046-style tracing with OS statistics"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make          - Build extension"
+	@echo "  make install  - Install extension to PostgreSQL"
+	@echo "  make test     - Run basic tests"
+	@echo ""
+	@echo "Features:"
+	@echo "  ✓ SQL text, bind variables, execution plans"
+	@echo "  ✓ Buffer I/O statistics"
+	@echo "  ✓ CPU time (user/system) from /proc"
+	@echo "  ✓ Storage I/O from /proc"
+	@echo "  ✓ Memory usage from /proc"
+	@echo "  ✓ No root required!"
+	@echo "  ✓ No eBPF needed!"
+	@echo ""
+	@echo "Usage:"
+	@echo "  1. Add to postgresql.conf: shared_preload_libraries = 'pg_trace_enhanced'"
+	@echo "  2. Restart PostgreSQL"
+	@echo "  3. CREATE EXTENSION pg_trace_enhanced;"
+	@echo "  4. SELECT pg_trace_start_trace();"
+	@echo "  5. Run your queries"
+	@echo "  6. SELECT pg_trace_stop_trace();"
+
+test:
+	@echo "Running basic tests..."
+	@psql -c "CREATE EXTENSION IF NOT EXISTS pg_trace_enhanced;"
+	@psql -c "SELECT pg_trace_start_trace();"
+	@psql -c "SELECT count(*) FROM pg_class;"
+	@psql -c "SELECT pg_trace_stop_trace();" | grep "pg_trace_"
+	@echo "Test passed! Check /tmp/pg_trace/ for trace file"
+

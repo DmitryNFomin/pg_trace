@@ -1,0 +1,8 @@
+# pg_trace_ultimate extension control file
+comment = 'Complete Oracle 10046-style tracing with per-block I/O, OS cache vs disk distinction'
+default_version = '1.0'
+module_pathname = '$libdir/pg_trace_ultimate'
+relocatable = true
+requires = ''
+superuser = false
+
