@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "lib/stringinfo.h"
 #include "pg_trace_procfs.h"
 
 /* System clock ticks per second */
