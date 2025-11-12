@@ -58,7 +58,8 @@ typedef struct ProcStats
 } ProcStats;
 
 /* Function declarations */
-extern bool proc_read_cpu_stats(pid_t pid, ProcCpuStats *stats);
+extern bool proc_read_cpu_stats_rusage(ProcCpuStats *stats);  /* MICROSECOND precision */
+extern bool proc_read_cpu_stats(pid_t pid, ProcCpuStats *stats);  /* Legacy /proc */
 extern bool proc_read_io_stats(pid_t pid, ProcIoStats *stats);
 extern bool proc_read_mem_stats(pid_t pid, ProcMemStats *stats);
 extern bool proc_read_all_stats(pid_t pid, ProcStats *stats);

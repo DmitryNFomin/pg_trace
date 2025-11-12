@@ -345,11 +345,10 @@ write_block_io_summary(void)
                        current_query_context->disk_reads;
     
     if (total_blocks == 0)
+    {
+        trace_printf("  (no physical I/O - all blocks from cache)\n");
         return;
-    
-    trace_printf("---------------------------------------------------------------------\n");
-    trace_printf("WAIT EVENTS (Oracle 10046-style):\n");
-    trace_printf("---------------------------------------------------------------------\n");
+    }
     
     /* Print per-block wait events */
     if (current_query_context->block_ios != NIL)
@@ -390,49 +389,7 @@ write_block_io_summary(void)
         }
         
         if (block_num == 0)
-            trace_printf("  (no physical I/O - all blocks from cache)\n");
-    }
-    
-    trace_printf("\n");
-    trace_printf("---------------------------------------------------------------------\n");
-    trace_printf("BLOCK I/O SUMMARY:\n");
-    trace_printf("---------------------------------------------------------------------\n");
-    trace_printf("Total blocks accessed: %ld\n", total_blocks);
-    trace_printf("  Buffer hits (cr): %ld blocks - no I/O\n",
-                 current_query_context->pg_cache_hits);
-    trace_printf("  Physical reads (pr): %ld blocks\n",
-                 current_query_context->disk_reads);
-    
-    if (current_query_context->disk_reads > 0)
-    {
-        double avg_time = current_query_context->total_disk_time_us / current_query_context->disk_reads;
-        trace_printf("  Average I/O time: %.1f microseconds/block\n", avg_time);
-        trace_printf("  Total I/O time: %.2f ms\n",
-                     current_query_context->total_disk_time_us / 1000.0);
-    }
-    
-    /* Verify against /proc if available */
-    {
-        ProcStats os_end;
-        
-        if (proc_read_all_stats(MyProcPid, &os_end))
-        {
-            ProcIoStats io_diff;
-            long actual_disk_blocks;
-            
-            proc_io_stats_diff(&current_query_context->os_stats_start.io, &os_end.io, &io_diff);
-            actual_disk_blocks = io_diff.read_bytes / BLCKSZ;
-        
-        trace_printf("\n");
-        trace_printf("Verification from /proc/[pid]/io:\n");
-        trace_printf("  Physical reads: %llu bytes (%ld blocks)\n",
-                     io_diff.read_bytes, actual_disk_blocks);
-        
-        if (actual_disk_blocks == current_query_context->disk_reads)
-            trace_printf("  ✓ Matches our disk read count!\n");
-        else if (actual_disk_blocks < current_query_context->disk_reads)
-            trace_printf("  Note: Some 'disk' reads may have been from OS cache\n");
-        }
+            trace_printf("(no physical I/O - all blocks from shared buffers)\n");
     }
 }
 
@@ -800,6 +757,8 @@ trace_planner(Query *parse, const char *query_string,
     TimestampTz start, end;
     long secs;
     int microsecs;
+    BufferUsage buffer_before, buffer_after;
+    long planning_buffers;
 
     if (!trace_enabled || !query_string)
     {
@@ -815,6 +774,13 @@ trace_planner(Query *parse, const char *query_string,
     current_query_context->sql_text = MemoryContextStrdup(TopMemoryContext, query_string);
     current_query_context->block_ios = NIL;
 
+    /* PARSE phase - Oracle 10046 style */
+    trace_printf("=====================================================================\n");
+    trace_printf("PARSE #%lld\n", (long long) current_query_context->cursor_id);
+    trace_printf("SQL: %s\n", query_string);
+    trace_printf("---------------------------------------------------------------------\n");
+    
+    buffer_before = pgBufferUsage;
     start = GetCurrentTimestamp();
 
     if (prev_planner_hook)
@@ -823,12 +789,14 @@ trace_planner(Query *parse, const char *query_string,
         result = standard_planner(parse, query_string, cursorOptions, boundParams);
 
     end = GetCurrentTimestamp();
+    buffer_after = pgBufferUsage;
+    
     TimestampDifference(start, end, &secs, &microsecs);
+    planning_buffers = (buffer_after.shared_blks_hit - buffer_before.shared_blks_hit) +
+                       (buffer_after.shared_blks_read - buffer_before.shared_blks_read);
 
-    trace_printf("=====================================================================\n");
-    trace_printf("PARSE #%lld\n", (long long) current_query_context->cursor_id);
-    trace_printf("SQL: %s\n", query_string);
-    trace_printf("PARSE TIME: %ld.%06d sec\n", secs, microsecs);
+    trace_printf("PARSE TIME: ela=%ld.%06d sec cpu=0.000 sec (planning)\n", secs, microsecs);
+    trace_printf("PARSE STATS: cr=%ld (catalog blocks read during planning)\n", planning_buffers);
 
     return result;
 }
@@ -846,13 +814,16 @@ trace_ExecutorStart(QueryDesc *queryDesc, int eflags)
         
         /* Capture starting state */
         current_query_context->buffer_usage_start = pgBufferUsage;
-        proc_read_all_stats(MyProcPid, &current_query_context->os_stats_start);
+        
+        /* Use getrusage() for microsecond-precision CPU timing */
+        proc_read_cpu_stats_rusage(&current_query_context->os_stats_start.cpu);
+        proc_read_io_stats(MyProcPid, &current_query_context->os_stats_start.io);
         
         /* Initialize buffer tracker */
         buffer_tracker.last_bufusage = pgBufferUsage;
         buffer_tracker.last_io_time = pgBufferUsage.blk_read_time;
         
-        /* Write binds if present */
+        /* Write binds if present - Oracle 10046 style */
         if (queryDesc->params && queryDesc->params->numParams > 0)
         {
             ParamListInfo params = queryDesc->params;
@@ -864,8 +835,7 @@ trace_ExecutorStart(QueryDesc *queryDesc, int eflags)
             for (i = 0; i < params->numParams; i++)
             {
                 ParamExternData *param = &params->params[i];
-                trace_printf(" Bind#%d type=%u ", i, param->ptype);
-
+                
                 if (!param->isnull)
                 {
                     Oid typoutput;
@@ -874,12 +844,12 @@ trace_ExecutorStart(QueryDesc *queryDesc, int eflags)
 
                     getTypeOutputInfo(param->ptype, &typoutput, &typIsVarlena);
                     val_str = OidOutputFunctionCall(typoutput, param->value);
-                    trace_printf("value=\"%s\"\n", val_str);
+                    trace_printf("  bind %d: value=\"%s\" oacdef=%u\n", i, val_str, param->ptype);
                     pfree(val_str);
                 }
                 else
                 {
-                    trace_printf("value=NULL\n");
+                    trace_printf("  bind %d: value=NULL oacdef=%u\n", i, param->ptype);
                 }
             }
         }
@@ -931,6 +901,7 @@ trace_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction,
         trace_printf("EXEC TIME: ela=%ld.%06d sec rows=%lld\n",
                      secs, microsecs,
                      (long long) queryDesc->estate->es_processed);
+        trace_printf("---------------------------------------------------------------------\n");
     }
 }
 
@@ -951,49 +922,46 @@ trace_ExecutorEnd(QueryDesc *queryDesc)
         /* Final I/O capture */
         track_block_io_during_execution();
         
+        /* Finalize instrumentation for all nodes recursively */
+        if (queryDesc->planstate)
+            finalize_plan_instrumentation(queryDesc->planstate);
+        
         /* Write buffer statistics */
         buffer_diff.shared_blks_hit = buffer_end.shared_blks_hit - 
                                       current_query_context->buffer_usage_start.shared_blks_hit;
         buffer_diff.shared_blks_read = buffer_end.shared_blks_read - 
                                        current_query_context->buffer_usage_start.shared_blks_read;
 
-        trace_printf("---------------------------------------------------------------------\n");
-        trace_printf("BUFFER STATS: cr=%ld pr=%ld\n",
-                     buffer_diff.shared_blks_hit,
-                     buffer_diff.shared_blks_read);
-        
-        /* Write OS stats */
-        if (proc_read_all_stats(MyProcPid, &os_end))
+        /* Write OS stats with MICROSECOND precision CPU timing */
+        if (proc_read_cpu_stats_rusage(&os_end.cpu))
         {
             ProcCpuStats cpu_diff;
             proc_cpu_stats_diff(&current_query_context->os_stats_start.cpu, &os_end.cpu, &cpu_diff);
             
-            trace_printf("CPU: user=%.3f sec system=%.3f sec total=%.3f sec",
-                         cpu_diff.utime_sec,
-                         cpu_diff.stime_sec,
+            trace_printf("EXEC STATS: cr=%ld pr=%ld cpu=%.6f sec elapsed=%.6f sec\n",
+                         buffer_diff.shared_blks_hit,
+                         buffer_diff.shared_blks_read,
+                         cpu_diff.total_sec,
                          cpu_diff.total_sec);
-            
-            /* Note about CPU time granularity */
-            if (cpu_diff.total_sec < 0.01)
-            {
-                trace_printf(" (Note: /proc granularity is ~10ms, very fast queries may show 0.000)");
-            }
-            trace_printf("\n");
         }
         
-        /* Write block I/O analysis */
-        write_block_io_summary();
+        /* STAT section - per-node execution statistics */
+        trace_printf("---------------------------------------------------------------------\n");
+        trace_printf("STAT #%lld (per-node execution statistics):\n", 
+                     (long long) current_query_context->cursor_id);
+        trace_printf("---------------------------------------------------------------------\n");
         
-        /* Write execution plan */
         if (queryDesc->planstate)
         {
-            /* Finalize instrumentation for all nodes recursively */
-            finalize_plan_instrumentation(queryDesc->planstate);
-            
-            trace_printf("---------------------------------------------------------------------\n");
-            trace_printf("EXECUTION PLAN #%lld:\n", (long long) current_query_context->cursor_id);
             write_plan_tree(queryDesc->planstate, 0);
         }
+        
+        /* WAIT section - block I/O events */
+        trace_printf("---------------------------------------------------------------------\n");
+        trace_printf("WAIT #%lld (I/O events during execution):\n", 
+                     (long long) current_query_context->cursor_id);
+        trace_printf("---------------------------------------------------------------------\n");
+        write_block_io_summary();
 
         trace_printf("=====================================================================\n\n");
 

@@ -1,7 +1,8 @@
 /*-------------------------------------------------------------------------
  *
  * pg_trace_procfs.c
- *    Implementation of /proc filesystem statistics collection
+ *    Implementation of CPU/IO statistics collection using getrusage()
+ *    and /proc filesystem
  *
  *-------------------------------------------------------------------------
  */
@@ -10,6 +11,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 
 #include "lib/stringinfo.h"
 #include "pg_trace_procfs.h"
@@ -38,7 +41,29 @@ ticks_to_seconds(unsigned long ticks)
 }
 
 /*
- * Read CPU statistics from /proc/[pid]/stat
+ * Read CPU statistics using getrusage() - MICROSECOND PRECISION
+ * This replaces /proc reading for much better granularity
+ */
+bool
+proc_read_cpu_stats_rusage(ProcCpuStats *stats)
+{
+    struct rusage usage;
+    
+    if (getrusage(RUSAGE_SELF, &usage) != 0)
+        return false;
+    
+    /* Convert timeval to seconds with microsecond precision */
+    stats->utime_sec = (double)usage.ru_utime.tv_sec + 
+                       (double)usage.ru_utime.tv_usec / 1000000.0;
+    stats->stime_sec = (double)usage.ru_stime.tv_sec + 
+                       (double)usage.ru_stime.tv_usec / 1000000.0;
+    stats->total_sec = stats->utime_sec + stats->stime_sec;
+    
+    return true;
+}
+
+/*
+ * Read CPU statistics from /proc/[pid]/stat (legacy, 10ms granularity)
  *
  * Format: pid (comm) state ppid pgrp session tty_nr tpgid flags minflt cminflt
  *         majflt cmajflt utime stime cutime cstime ...
@@ -215,14 +240,29 @@ proc_cpu_stats_diff(const ProcCpuStats *start,
     if (!start || !end || !diff)
         return;
     
-    diff->utime = end->utime - start->utime;
-    diff->stime = end->stime - start->stime;
-    diff->cutime = end->cutime - start->cutime;
-    diff->cstime = end->cstime - start->cstime;
-    
-    diff->utime_sec = ticks_to_seconds(diff->utime);
-    diff->stime_sec = ticks_to_seconds(diff->stime);
-    diff->total_sec = diff->utime_sec + diff->stime_sec;
+    /* Use direct *_sec fields (populated by getrusage) if available */
+    if (end->utime_sec > 0 || end->stime_sec > 0)
+    {
+        diff->utime_sec = end->utime_sec - start->utime_sec;
+        diff->stime_sec = end->stime_sec - start->stime_sec;
+        diff->total_sec = diff->utime_sec + diff->stime_sec;
+        diff->utime = 0;
+        diff->stime = 0;
+        diff->cutime = 0;
+        diff->cstime = 0;
+    }
+    else
+    {
+        /* Fallback to /proc clock ticks */
+        diff->utime = end->utime - start->utime;
+        diff->stime = end->stime - start->stime;
+        diff->cutime = end->cutime - start->cutime;
+        diff->cstime = end->cstime - start->cstime;
+        
+        diff->utime_sec = ticks_to_seconds(diff->utime);
+        diff->stime_sec = ticks_to_seconds(diff->stime);
+        diff->total_sec = diff->utime_sec + diff->stime_sec;
+    }
 }
 
 /*
