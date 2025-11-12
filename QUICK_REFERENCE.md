@@ -9,7 +9,7 @@
 ## 🚀 Installation (3 Commands)
 
 ```bash
-cd /Users/dmitryfomin/work/git/pg_trace && make -f Makefile.ultimate && sudo make -f Makefile.ultimate install
+cd /Users/dmitryfomin/work/git/pg_trace && make && sudo make install
 echo "shared_preload_libraries = 'pg_trace_ultimate'" | sudo tee -a $PGDATA/postgresql.conf
 echo "track_io_timing = on" | sudo tee -a $PGDATA/postgresql.conf && sudo pg_ctl restart
 ```
@@ -336,7 +336,7 @@ After optimization, you should see:
 
 | Question | Answer |
 |----------|--------|
-| **How to install?** | `make -f Makefile.ultimate && sudo make install` |
+| **How to install?** | `make && sudo make install` |
 | **How to enable?** | `shared_preload_libraries='pg_trace_ultimate'` + restart |
 | **How to use?** | `SELECT pg_trace_start_trace();` run queries, then `SELECT pg_trace_stop_trace();` |
 | **Where are traces?** | `/tmp/pg_trace/pg_trace_*.trc` |

@@ -6,57 +6,9 @@ We created **THREE versions** of Oracle 10046-style tracing for PostgreSQL, each
 
 ## 📦 The Three Versions
 
-### Version 1: Basic MVP
-**File:** `pg_trace_mvp.c`  
-**Build:** `make -f Makefile.mvp`
-
-**Features:**
-- SQL text and bind variables
-- Execution plans
-- Buffer statistics (aggregated)
-- Basic timing
-
-**Pros:**
-- Simplest implementation
-- ~2% overhead
-- No dependencies
-
-**Cons:**
-- No CPU time
-- No I/O details
-- No per-block info
-
-**Use when:** You just need SQL + plans
-
----
-
-### Version 2: Enhanced with /proc
-**Files:** `pg_trace_enhanced.c` + `pg_trace_procfs.c`  
-**Build:** `make -f Makefile.enhanced`
-
-**Features:**
-- Everything from Basic MVP
-- **CPU time** (user/system) from `/proc`
-- **Total I/O bytes** from `/proc`
-- Memory usage
-- Per-table I/O breakdown
-
-**Pros:**
-- Rich OS-level statistics
-- Still only ~2% overhead
-- No special requirements
-
-**Cons:**
-- No per-block detail
-- No timing per I/O
-
-**Use when:** You want OS stats without eBPF
-
----
-
-### Version 3: Ultimate (Per-Block I/O) ⭐ **RECOMMENDED**
+### pg_trace Ultimate ⭐ **RECOMMENDED**
 **Files:** `pg_trace_ultimate.c` + `pg_trace_procfs.c`  
-**Build:** `make -f Makefile.ultimate`
+**Build:** `make && sudo make install`
 
 **Features:**
 - Everything from Enhanced
@@ -216,7 +168,7 @@ psql -c "CREATE EXTENSION pg_trace_ultimate;"
 ### Test It:
 
 ```bash
-make -f Makefile.ultimate test
+make test
 ```
 
 ---
@@ -311,7 +263,7 @@ This gives you **100% Oracle 10046 + OS cache analysis**.
 ```bash
 # 1. Build
 cd /Users/dmitryfomin/work/git/pg_trace
-make -f Makefile.ultimate && sudo make -f Makefile.ultimate install
+make && sudo make install
 
 # 2. Configure
 echo "shared_preload_libraries = 'pg_trace_ultimate'" >> $PGDATA/postgresql.conf

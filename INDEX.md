@@ -20,19 +20,7 @@
 │   ├── src/pg_trace_procfs.h           ← /proc reader header
 │   ├── sql/pg_trace_ultimate--1.0.sql  ← SQL interface
 │   ├── pg_trace_ultimate.control       ← Extension metadata
-│   └── Makefile.ultimate               ← Build file
-│
-├── 🔧 Source Code - Enhanced
-│   ├── src/pg_trace_enhanced.c         ← Extension + /proc stats
-│   ├── sql/pg_trace_enhanced--1.0.sql  ← SQL interface
-│   ├── pg_trace_enhanced.control       ← Extension metadata
-│   └── Makefile.enhanced               ← Build file
-│
-├── 🔧 Source Code - Basic MVP
-│   ├── src/pg_trace_mvp.c              ← Minimal extension
-│   ├── sql/pg_trace_mvp--1.0.sql       ← SQL interface
-│   ├── pg_trace_mvp.control            ← Extension metadata
-│   └── Makefile.mvp                    ← Build file
+│   └── Makefile                        ← Build file
 │
 ├── 🐍 eBPF Scripts (Optional, requires root)
 │   ├── ebpf/pg_trace_waits.py          ← Wait event tracing
@@ -146,7 +134,7 @@
 
 | I Want To... | Use These Files | Read This Docs |
 |--------------|----------------|----------------|
-| **Use it now** | ultimate.c + Makefile.ultimate | QUICK_REFERENCE.md |
+| **Use it now** | ultimate.c + Makefile | QUICK_REFERENCE.md |
 | **Understand internals** | ultimate.c source code | HOW_IT_WORKS.md |
 | **Choose version** | All three .c files | FINAL_SUMMARY.md |
 | **Troubleshoot** | ultimate.c | ULTIMATE_README.md (Troubleshooting) |
@@ -159,7 +147,7 @@
 ## 📞 Help!
 
 **I'm lost, where do I start?**
-→ Read `README.md`, then `QUICK_REFERENCE.md`, then build `Makefile.ultimate`
+→ Read `README.md`, then `QUICK_REFERENCE.md`, then build with `make`
 
 **I want the best version**
 → Use `pg_trace_ultimate` (this is it!)
@@ -178,4 +166,4 @@
 
 ---
 
-**Bottom Line:** Start with `README.md`, then `QUICK_REFERENCE.md`, build `Makefile.ultimate`, create extension, start tracing! 🚀
+**Bottom Line:** Start with `README.md`, then `QUICK_REFERENCE.md`, build with `make`, create extension, start tracing! 🚀

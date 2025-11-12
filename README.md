@@ -27,8 +27,8 @@ git clone https://github.com/DmitryNFomin/pg_trace.git
 cd pg_trace
 
 # Build
-make -f Makefile.ultimate
-sudo make -f Makefile.ultimate install
+make
+sudo make install
 
 # Configure PostgreSQL (add to postgresql.conf)
 echo "shared_preload_libraries = 'pg_trace_ultimate'" >> $PGDATA/postgresql.conf
@@ -103,17 +103,9 @@ EXECUTION PLAN #1:
 
 This repository includes three implementations:
 
-1. **pg_trace_ultimate** ⭐ **(RECOMMENDED)**
-   - Per-block I/O + OS cache detection + per-node stats
-   - Build: `make -f Makefile.ultimate`
-
-2. **pg_trace_enhanced**
-   - OS stats without per-block detail
-   - Build: `make -f Makefile.enhanced`
-
-3. **pg_trace_mvp**
-   - Minimal SQL + plans only
-   - Build: `make -f Makefile.mvp`
+**pg_trace_ultimate** ⭐ **(RECOMMENDED)**
+- Per-block I/O + OS cache detection + per-node stats
+- Build: `make && sudo make install`
 
 ## 🆚 Comparison with Oracle 10046
 

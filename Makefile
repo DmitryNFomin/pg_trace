@@ -1,4 +1,4 @@
-# Makefile for pg_trace Ultimate
+# Makefile for pg_trace Ultimate (Oracle 10046-style tracing)
 
 MODULE_big = pg_trace_ultimate
 OBJS = src/pg_trace_ultimate.o src/pg_trace_procfs.o
