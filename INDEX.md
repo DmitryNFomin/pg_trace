@@ -5,21 +5,14 @@
 ```
 /Users/dmitryfomin/work/git/pg_trace/
 │
-├── 📚 Documentation (START HERE!)
-│   ├── START_HERE.md              ← ⭐ BEGIN HERE!
-│   ├── QUICK_REFERENCE.md          ← One-page cheat sheet
-│   ├── ULTIMATE_README.md          ← Complete guide to Ultimate version
-│   ├── PER_NODE_STATS.md          ← ✨ NEW! Per-node statistics explained
-│   ├── FINAL_SUMMARY.md            ← All three versions compared
+├── 📚 Documentation
+│   ├── README.md                  ← ⭐ Main project readme (START HERE!)
+│   ├── QUICK_REFERENCE.md         ← One-page cheat sheet
+│   ├── ULTIMATE_README.md         ← Complete guide to Ultimate version
+│   ├── PER_NODE_STATS.md          ← Per-node statistics explained
 │   ├── HOW_IT_WORKS.md            ← Technical deep dive
-│   ├── APPROACHES_COMPARISON.md    ← All architectural approaches
-│   ├── PROCFS_APPROACH.md         ← /proc filesystem details
-│   ├── SMGR_APPROACH.md           ← Storage manager discussion
-│   ├── QUICKSTART.md              ← Original MVP quickstart
-│   ├── README_MVP.md              ← MVP documentation
-│   ├── MVP_SUMMARY.md             ← MVP technical summary
-│   ├── FUTURE_ENHANCEMENTS.md     ← Enhancement ideas
-│   └── INDEX.md                   ← This file
+│   ├── FINAL_SUMMARY.md           ← All three versions compared
+│   └── INDEX.md                   ← This file (file navigation)
 │
 ├── 🔧 Source Code - Ultimate (RECOMMENDED)
 │   ├── src/pg_trace_ultimate.c         ⭐ Main extension - per-block I/O
