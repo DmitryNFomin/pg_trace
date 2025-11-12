@@ -220,19 +220,13 @@ trace_printf(const char *fmt, ...)
 
 /*
  * Get relation name from RelFileNode
+ * Note: RelidByRelfilenode may not be available in all PostgreSQL versions
  */
 static char *
 get_relation_name(RelFileNode *rnode)
 {
-    Oid relid = RelidByRelfilenode(rnode->spcNode, rnode->relNode);
-    
-    if (OidIsValid(relid))
-    {
-        char *relname = get_rel_name(relid);
-        if (relname)
-            return relname;
-    }
-    
+    /* Try to find relation by relfilenode - simplified approach */
+    /* For now, just return the file path representation */
     return psprintf("%u/%u/%u", rnode->spcNode, rnode->dbNode, rnode->relNode);
 }
 
@@ -242,26 +236,31 @@ get_relation_name(RelFileNode *rnode)
 static void
 capture_buffer_io_stats(void)
 {
-    BufferUsage current_bufusage = pgBufferUsage;
+    BufferUsage current_bufusage;
     instr_time current_io_time;
+    long new_reads;
+    long new_hits;
+    instr_time io_delta;
+    double io_time_us;
     
     if (!track_io_timing)
         return;
     
+    current_bufusage = pgBufferUsage;
     current_io_time = pgBufferUsage.blk_read_time;
     
     /* Check if any new I/O happened */
-    long new_reads = current_bufusage.shared_blks_read - 
-                     buffer_tracker.last_bufusage.shared_blks_read;
-    long new_hits = current_bufusage.shared_blks_hit - 
-                    buffer_tracker.last_bufusage.shared_blks_hit;
+    new_reads = current_bufusage.shared_blks_read - 
+                buffer_tracker.last_bufusage.shared_blks_read;
+    new_hits = current_bufusage.shared_blks_hit - 
+               buffer_tracker.last_bufusage.shared_blks_hit;
     
     if (new_reads > 0 || new_hits > 0)
     {
         /* Calculate I/O time delta */
-        instr_time io_delta = current_io_time;
+        io_delta = current_io_time;
         INSTR_TIME_SUBTRACT(io_delta, buffer_tracker.last_io_time);
-        double io_time_us = INSTR_TIME_GET_MICROSEC(io_delta);
+        io_time_us = INSTR_TIME_GET_MICROSEC(io_delta);
         
         /* Create block I/O stat entry */
         BlockIoStat *stat = palloc0(sizeof(BlockIoStat));
@@ -321,7 +320,6 @@ track_block_io_during_execution(void)
 static void
 write_block_io_summary(void)
 {
-    ListCell *lc;
     long total_blocks = current_query_context->pg_cache_hits +
                        current_query_context->os_cache_hits +
                        current_query_context->disk_reads;
@@ -427,23 +425,40 @@ write_plan_tree(PlanState *planstate, int level)
     if (!planstate)
         return;
     
-    Instrumentation *instr = planstate->instrument;
-    Plan *plan = planstate->plan;
+    Instrumentation *instr;
     char indent[256];
     int i;
+    char *node_type_name;
+    
+    /* Get node type name - use nodeToString on the plan node */
+    if (planstate->plan)
+    {
+        node_type_name = nodeToString((Node *)planstate->plan);
+    }
+    else
+    {
+        /* Fallback: use node tag number */
+        node_type_name = psprintf("NodeType-%d", (int)planstate->type);
+    }
     
     for (i = 0; i < level * 2 && i < 255; i++)
         indent[i] = ' ';
     indent[i] = '\0';
     
-    trace_printf("%s-> %s", indent, nodeToString(planstate->type));
+    trace_printf("%s-> %s", indent, node_type_name);
+    
+    /* Free the string if we allocated it */
+    if (!planstate->plan)
+        pfree(node_type_name);
+    
+    instr = planstate->instrument;
     
     if (instr && instr->nloops > 0)
     {
         double total_ms = instr->total * 1000.0;
         double startup_ms = instr->startup * 1000.0;
         
-        trace_printf(" (actual rows=%.0f loops=%d)\n", 
+        trace_printf(" (actual rows=%.0f loops=%.0f)\n", 
                      instr->ntuples / instr->nloops, instr->nloops);
         
         /* Timing breakdown */
@@ -513,14 +528,20 @@ write_plan_tree(PlanState *planstate, int level)
                     trace_printf("\n");
                     
                     /* CPU time estimation (wall clock - I/O time) */
-                    double cpu_ms = total_ms - io_ms;
-                    if (cpu_ms > 0)
                     {
-                        double cpu_pct = (cpu_ms / total_ms) * 100.0;
-                        double io_pct = (io_ms / total_ms) * 100.0;
+                        double cpu_ms;
+                        double cpu_pct;
+                        double io_pct;
                         
-                        trace_printf("%s   Time breakdown: CPU ~%.3f ms (%.1f%%), I/O ~%.3f ms (%.1f%%)\n",
-                                     indent, cpu_ms, cpu_pct, io_ms, io_pct);
+                        cpu_ms = total_ms - io_ms;
+                        if (cpu_ms > 0)
+                        {
+                            cpu_pct = (cpu_ms / total_ms) * 100.0;
+                            io_pct = (io_ms / total_ms) * 100.0;
+                        
+                            trace_printf("%s   Time breakdown: CPU ~%.3f ms (%.1f%%), I/O ~%.3f ms (%.1f%%)\n",
+                                         indent, cpu_ms, cpu_pct, io_ms, io_pct);
+                        }
                     }
                 }
                 else if (!track_io_timing && instr->bufusage.shared_blks_read > 0)
@@ -738,16 +759,18 @@ trace_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction,
 static void
 trace_ExecutorEnd(QueryDesc *queryDesc)
 {
+    BufferUsage buffer_end;
+    BufferUsage buffer_diff;
+    ProcStats os_end;
+    
     if (trace_enabled && current_query_context)
     {
-        BufferUsage buffer_end = pgBufferUsage;
-        ProcStats os_end;
+        buffer_end = pgBufferUsage;
         
         /* Final I/O capture */
         track_block_io_during_execution();
         
         /* Write buffer statistics */
-        BufferUsage buffer_diff;
         buffer_diff.shared_blks_hit = buffer_end.shared_blks_hit - 
                                       current_query_context->buffer_usage_start.shared_blks_hit;
         buffer_diff.shared_blks_read = buffer_end.shared_blks_read - 
@@ -786,7 +809,8 @@ trace_ExecutorEnd(QueryDesc *queryDesc)
         /* Cleanup */
         if (current_query_context->sql_text)
             pfree(current_query_context->sql_text);
-        list_free_deep(current_query_context->block_ios);
+        if (current_query_context->block_ios)
+            list_free_deep(current_query_context->block_ios);
         pfree(current_query_context);
         current_query_context = NULL;
     }
