@@ -437,6 +437,41 @@ write_block_io_summary(void)
 }
 
 /*
+ * Recursively finalize instrumentation for all nodes
+ */
+static void
+finalize_plan_instrumentation(PlanState *planstate)
+{
+    int i;
+    
+    if (!planstate)
+        return;
+    
+    /* Finalize this node if needed */
+    if (planstate->instrument && planstate->instrument->running)
+        InstrEndLoop(planstate->instrument);
+    
+    /* Recurse to child nodes */
+    if (planstate->lefttree)
+        finalize_plan_instrumentation(planstate->lefttree);
+    if (planstate->righttree)
+        finalize_plan_instrumentation(planstate->righttree);
+    
+    /* Handle special multi-child nodes */
+    if (IsA(planstate, AppendState))
+    {
+        AppendState *as = (AppendState *) planstate;
+        for (i = 0; i < as->as_nplans; i++)
+            finalize_plan_instrumentation(as->appendplans[i]);
+    }
+    else if (IsA(planstate, SubqueryScanState))
+    {
+        SubqueryScanState *sss = (SubqueryScanState *) planstate;
+        finalize_plan_instrumentation(sss->subplan);
+    }
+}
+
+/*
  * Write plan tree with statistics - ENHANCED with per-node detail
  */
 static void
@@ -457,23 +492,29 @@ write_plan_tree(PlanState *planstate, int level)
         indent[i] = ' ';
     indent[i] = '\0';
     
-    /* Get node type name - extract from nodeToString output */
+    /* Get node type name and plan details */
     if (planstate->plan)
     {
+        Plan *plan = planstate->plan;
+        
         /* Use nodeToString but extract just the type name (format: "{NODETYPE :field...}") */
         node_type_name = nodeToString((Node *)planstate->plan);
         
         /* Extract node type: skip '{' and get text up to first ':' or space */
         if (node_type_name[0] == '{')
         {
-            char *start = node_type_name + 1;  /* Skip '{' */
-            char *end = strchr(start, ':');
+            char *start;
+            char *end;
+            int type_len;
+            
+            start = node_type_name + 1;  /* Skip '{' */
+            end = strchr(start, ':');
             if (!end)
                 end = strchr(start, ' ');
             if (!end)
                 end = start + strlen(start);
             
-            int type_len = end - start;
+            type_len = end - start;
             if (type_len > 255) type_len = 255;
             strncpy(type_buf, start, type_len);
             type_buf[type_len] = '\0';
@@ -486,6 +527,13 @@ write_plan_tree(PlanState *planstate, int level)
             type_buf[50] = '\0';
             trace_printf("%s-> %s", indent, type_buf);
         }
+        
+        /* Print plan costs and estimates */
+        trace_printf(" (cost=%.2f..%.2f rows=%.0f width=%d)",
+                     plan->startup_cost,
+                     plan->total_cost,
+                     plan->plan_rows,
+                     plan->plan_width);
     }
     else
     {
@@ -496,13 +544,103 @@ write_plan_tree(PlanState *planstate, int level)
     
     instr = planstate->instrument;
     
+    /* Print actual runtime statistics on same line as costs */
     if (instr && instr->nloops > 0)
     {
-        double total_ms = instr->total * 1000.0;
-        double startup_ms = instr->startup * 1000.0;
+        double total_ms;
+        double startup_ms;
+        
+        total_ms = instr->total * 1000.0;
+        startup_ms = instr->startup * 1000.0;
         
         trace_printf(" (actual rows=%.0f loops=%.0f)\n", 
                      instr->ntuples / instr->nloops, instr->nloops);
+        
+        /* Print node-specific details (table/index names) */
+        if (planstate->plan)
+        {
+            Plan *plan = planstate->plan;
+            
+            switch (nodeTag(plan))
+            {
+                case T_SeqScan:
+                case T_SampleScan:
+                    {
+                        Scan *scan = (Scan *)plan;
+                        RangeTblEntry *rte;
+                        char *relname;
+                        
+                        if (scan->scanrelid > 0)
+                        {
+                            rte = exec_rt_fetch(scan->scanrelid, planstate->state);
+                            if (rte && rte->relid != InvalidOid)
+                            {
+                                relname = get_rel_name(rte->relid);
+                                if (relname)
+                                    trace_printf("%s   Relation: %s\n", indent, relname);
+                            }
+                        }
+                    }
+                    break;
+                
+                case T_IndexScan:
+                case T_IndexOnlyScan:
+                    {
+                        IndexScan *iscan = (IndexScan *)plan;
+                        RangeTblEntry *rte;
+                        char *relname;
+                        char *idxname;
+                        
+                        if (iscan->scan.scanrelid > 0)
+                        {
+                            rte = exec_rt_fetch(iscan->scan.scanrelid, planstate->state);
+                            if (rte && rte->relid != InvalidOid)
+                            {
+                                relname = get_rel_name(rte->relid);
+                                idxname = get_rel_name(iscan->indexid);
+                                if (relname)
+                                    trace_printf("%s   Relation: %s\n", indent, relname);
+                                if (idxname)
+                                    trace_printf("%s   Index: %s\n", indent, idxname);
+                            }
+                        }
+                    }
+                    break;
+                
+                case T_BitmapIndexScan:
+                    {
+                        BitmapIndexScan *biscan = (BitmapIndexScan *)plan;
+                        char *idxname;
+                        
+                        idxname = get_rel_name(biscan->indexid);
+                        if (idxname)
+                            trace_printf("%s   Index: %s\n", indent, idxname);
+                    }
+                    break;
+                
+                case T_BitmapHeapScan:
+                    {
+                        BitmapHeapScan *bhscan = (BitmapHeapScan *)plan;
+                        RangeTblEntry *rte;
+                        char *relname;
+                        
+                        if (bhscan->scan.scanrelid > 0)
+                        {
+                            rte = exec_rt_fetch(bhscan->scan.scanrelid, planstate->state);
+                            if (rte && rte->relid != InvalidOid)
+                            {
+                                relname = get_rel_name(rte->relid);
+                                if (relname)
+                                    trace_printf("%s   Relation: %s\n", indent, relname);
+                            }
+                        }
+                    }
+                    break;
+                
+                default:
+                    break;
+            }
+        }
         
         /* Timing breakdown */
         trace_printf("%s   Timing: startup=%.3f ms, total=%.3f ms", 
@@ -849,6 +987,9 @@ trace_ExecutorEnd(QueryDesc *queryDesc)
         /* Write execution plan */
         if (queryDesc->planstate)
         {
+            /* Finalize instrumentation for all nodes recursively */
+            finalize_plan_instrumentation(queryDesc->planstate);
+            
             trace_printf("---------------------------------------------------------------------\n");
             trace_printf("EXECUTION PLAN #%lld:\n", (long long) current_query_context->cursor_id);
             write_plan_tree(queryDesc->planstate, 0);
@@ -864,7 +1005,8 @@ trace_ExecutorEnd(QueryDesc *queryDesc)
         pfree(current_query_context);
         current_query_context = NULL;
     }
-
+    
+    /* Call standard executor end to cleanup */
     if (prev_ExecutorEnd_hook)
         prev_ExecutorEnd_hook(queryDesc);
     else
