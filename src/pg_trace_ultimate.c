@@ -151,8 +151,8 @@ _PG_init(void)
                                "Directory for trace files",
                                NULL,
                                &trace_output_directory,
-                               "/tmp/pg_trace",
-                               PGC_SUSET,
+                               "/tmp",
+                               PGC_USERSET,
                                0,
                                NULL, NULL, NULL);
 
@@ -879,17 +879,22 @@ pg_trace_start_trace(PG_FUNCTION_ARGS)
 {
     struct stat st;
 
+    const char *output_dir;
+    
     if (trace_enabled)
     {
         ereport(NOTICE, (errmsg("Trace already enabled")));
         PG_RETURN_TEXT_P(cstring_to_text(trace_filename));
     }
 
-    if (stat(trace_output_directory, &st) != 0)
-        mkdir(trace_output_directory, 0755);
+    /* Use configured directory or default to /tmp */
+    output_dir = (trace_output_directory && trace_output_directory[0]) ? trace_output_directory : "/tmp";
+
+    if (stat(output_dir, &st) != 0)
+        mkdir(output_dir, 0755);
 
     snprintf(trace_filename, MAXPGPATH, "%s/pg_trace_%d_%ld.trc",
-             trace_output_directory, MyProcPid, (long) time(NULL));
+             output_dir, MyProcPid, (long) time(NULL));
 
     trace_file = fopen(trace_filename, "w");
     if (!trace_file)
