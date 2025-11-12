@@ -20,6 +20,7 @@
  */
 #include "postgres.h"
 
+#include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -429,27 +430,50 @@ write_plan_tree(PlanState *planstate, int level)
     char indent[256];
     int i;
     char *node_type_name;
+    char type_buf[256];
+    NodeTag tag;
     
-    /* Get node type name - use nodeToString on the plan node */
-    if (planstate->plan)
-    {
-        node_type_name = nodeToString((Node *)planstate->plan);
-    }
-    else
-    {
-        /* Fallback: use node tag number */
-        node_type_name = psprintf("NodeType-%d", (int)planstate->type);
-    }
-    
+    /* Create indentation first */
     for (i = 0; i < level * 2 && i < 255; i++)
         indent[i] = ' ';
     indent[i] = '\0';
     
-    trace_printf("%s-> %s", indent, node_type_name);
-    
-    /* Free the string if we allocated it */
-    if (!planstate->plan)
-        pfree(node_type_name);
+    /* Get node type name - extract from nodeToString output */
+    if (planstate->plan)
+    {
+        /* Use nodeToString but extract just the type name (format: "{NODETYPE :field...}") */
+        node_type_name = nodeToString((Node *)planstate->plan);
+        
+        /* Extract node type: skip '{' and get text up to first ':' or space */
+        if (node_type_name[0] == '{')
+        {
+            char *start = node_type_name + 1;  /* Skip '{' */
+            char *end = strchr(start, ':');
+            if (!end)
+                end = strchr(start, ' ');
+            if (!end)
+                end = start + strlen(start);
+            
+            int type_len = end - start;
+            if (type_len > 255) type_len = 255;
+            strncpy(type_buf, start, type_len);
+            type_buf[type_len] = '\0';
+            trace_printf("%s-> %s", indent, type_buf);
+        }
+        else
+        {
+            /* Fallback: print first 50 chars */
+            strncpy(type_buf, node_type_name, 50);
+            type_buf[50] = '\0';
+            trace_printf("%s-> %s", indent, type_buf);
+        }
+    }
+    else
+    {
+        /* Fallback: use node tag number */
+        tag = nodeTag(planstate);
+        trace_printf("%s-> NodeType-%d", indent, (int)tag);
+    }
     
     instr = planstate->instrument;
     
@@ -787,10 +811,17 @@ trace_ExecutorEnd(QueryDesc *queryDesc)
             ProcCpuStats cpu_diff;
             proc_cpu_stats_diff(&current_query_context->os_stats_start.cpu, &os_end.cpu, &cpu_diff);
             
-            trace_printf("CPU: user=%.3f sec system=%.3f sec total=%.3f sec\n",
+            trace_printf("CPU: user=%.3f sec system=%.3f sec total=%.3f sec",
                          cpu_diff.utime_sec,
                          cpu_diff.stime_sec,
                          cpu_diff.total_sec);
+            
+            /* Note about CPU time granularity */
+            if (cpu_diff.total_sec < 0.01)
+            {
+                trace_printf(" (Note: /proc granularity is ~10ms, very fast queries may show 0.000)");
+            }
+            trace_printf("\n");
         }
         
         /* Write block I/O analysis */
