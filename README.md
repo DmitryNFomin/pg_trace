@@ -23,7 +23,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/pg_trace.git
+git clone https://github.com/DmitryNFomin/pg_trace.git
 cd pg_trace
 
 # Build
@@ -169,7 +169,7 @@ Based on Oracle 10046 trace format and PostgreSQL instrumentation infrastructure
 
 ## 📞 Support
 
-- **Issues:** [GitHub Issues](https://github.com/YOUR_USERNAME/pg_trace/issues)
+- **Issues:** [GitHub Issues](https://github.com/DmitryNFomin/pg_trace/issues)
 - **Documentation:** See [INDEX.md](INDEX.md) for complete file navigation
 
 ---
