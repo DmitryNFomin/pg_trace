@@ -59,11 +59,10 @@ We created **THREE versions** of Oracle 10046-style tracing for PostgreSQL, each
 
 ## 💡 Which Version Should You Use?
 
-### For Most Users: **Ultimate** ⭐
+### Quick Start:
 
 ```bash
-make -f Makefile.ultimate
-sudo make -f Makefile.ultimate install
+make && sudo make install
 
 # Configure
 echo "shared_preload_libraries = 'pg_trace_ultimate'" >> postgresql.conf
@@ -77,15 +76,7 @@ SELECT pg_trace_start_trace();
 SELECT pg_trace_stop_trace();
 ```
 
-**Why:** Gets you 95% of Oracle 10046 with minimal overhead
-
-### For Minimal Overhead: **Enhanced**
-
-If `track_io_timing` overhead concerns you (old hardware), use Enhanced instead.
-
-### For Simplicity: **Basic MVP**
-
-If you only need SQL + plans without any OS stats.
+**This gives you 95% of Oracle 10046 with minimal overhead!**
 
 ---
 
@@ -138,18 +129,13 @@ Three-Tier Cache Analysis:
 
 ## 🔧 Build & Install Guide
 
-### All at Once:
+### Build and Install:
 
 ```bash
 cd /Users/dmitryfomin/work/git/pg_trace
 
-# Build all versions
-make -f Makefile.mvp
-make -f Makefile.enhanced  
-make -f Makefile.ultimate
-
-# Install (pick one or all)
-sudo make -f Makefile.ultimate install
+# Build and install
+make && sudo make install
 
 # Configure postgresql.conf
 cat >> $PGDATA/postgresql.conf <<EOF
